@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2018 the original author or authors.
+ * Copyright 2002-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -25,6 +25,7 @@ import java.util.Optional;
 
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.MonoProcessor;
+import reactor.core.publisher.Sinks;
 
 import org.springframework.beans.BeanUtils;
 import org.springframework.core.DefaultParameterNameDiscoverer;
@@ -41,7 +42,6 @@ import org.springframework.util.ClassUtils;
 import org.springframework.validation.BindingResult;
 import org.springframework.validation.Errors;
 import org.springframework.validation.annotation.Validated;
-import org.springframework.web.bind.WebDataBinder;
 import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.support.WebExchangeBindException;
 import org.springframework.web.bind.support.WebExchangeDataBinder;
@@ -117,12 +117,12 @@ public class ModelAttributeMethodArgumentResolver extends HandlerMethodArgumentR
 		Mono<?> valueMono = prepareAttributeMono(name, valueType, context, exchange);
 
 		Map<String, Object> model = context.getModel().asMap();
-		MonoProcessor<BindingResult> bindingResultMono = MonoProcessor.create();
+		MonoProcessor<BindingResult> bindingResultMono = MonoProcessor.fromSink(Sinks.one());
 		model.put(BindingResult.MODEL_KEY_PREFIX + name, bindingResultMono);
 
 		return valueMono.flatMap(value -> {
 			WebExchangeDataBinder binder = context.createDataBinder(exchange, value, name);
-			return binder.bind(exchange)
+			return bindRequestParameters(binder, exchange)
 					.doOnError(bindingResultMono::onError)
 					.doOnSuccess(aVoid -> {
 						validateIfApplicable(binder, parameter);
@@ -135,8 +135,7 @@ public class ModelAttributeMethodArgumentResolver extends HandlerMethodArgumentR
 						BindingResult errors = binder.getBindingResult();
 						if (adapter != null) {
 							return adapter.fromPublisher(errors.hasErrors() ?
-									Mono.error(new WebExchangeBindException(parameter, errors)) :
-									valueMono);
+									Mono.error(new WebExchangeBindException(parameter, errors)) : valueMono);
 						}
 						else {
 							if (errors.hasErrors() && !hasErrorsArgument(parameter)) {
@@ -146,6 +145,16 @@ public class ModelAttributeMethodArgumentResolver extends HandlerMethodArgumentR
 						}
 					}));
 		});
+	}
+
+	/**
+	 * Extension point to bind the request to the target object.
+	 * @param binder the data binder instance to use for the binding
+	 * @param exchange the current request
+	 * @since 5.2.6
+	 */
+	protected Mono<Void> bindRequestParameters(WebExchangeDataBinder binder, ServerWebExchange exchange) {
+		return binder.bind(exchange);
 	}
 
 	private Mono<?> prepareAttributeMono(String attributeName, ResolvableType attributeType,
@@ -158,15 +167,13 @@ public class ModelAttributeMethodArgumentResolver extends HandlerMethodArgumentR
 		}
 
 		if (attribute == null) {
-			Class<?> attributeClass = attributeType.getRawClass();
-			Assert.state(attributeClass != null, "No attribute class");
-			return createAttribute(attributeName, attributeClass, context, exchange);
+			return createAttribute(attributeName, attributeType.toClass(), context, exchange);
 		}
 
-		ReactiveAdapter adapterFrom = getAdapterRegistry().getAdapter(null, attribute);
-		if (adapterFrom != null) {
-			Assert.isTrue(!adapterFrom.isMultiValue(), "Data binding only supports single-value async types");
-			return Mono.from(adapterFrom.toPublisher(attribute));
+		ReactiveAdapter adapter = getAdapterRegistry().getAdapter(null, attribute);
+		if (adapter != null) {
+			Assert.isTrue(!adapter.isMultiValue(), "Data binding only supports single-value async types");
+			return Mono.from(adapter.toPublisher(attribute));
 		}
 		else {
 			return Mono.justOrEmpty(attribute);
@@ -226,7 +233,8 @@ public class ModelAttributeMethodArgumentResolver extends HandlerMethodArgumentR
 		}
 
 		// A single data class constructor -> resolve constructor arguments from request parameters.
-		return WebExchangeDataBinder.extractValuesToBind(exchange).map(bindValues -> {
+		WebExchangeDataBinder binder = context.createDataBinder(exchange, null, attributeName);
+		return getValuesToBind(binder, exchange).map(bindValues -> {
 			ConstructorProperties cp = ctor.getAnnotation(ConstructorProperties.class);
 			String[] paramNames = (cp != null ? cp.value() : parameterNameDiscoverer.getParameterNames(ctor));
 			Assert.state(paramNames != null, () -> "Cannot resolve parameter names for constructor " + ctor);
@@ -234,7 +242,6 @@ public class ModelAttributeMethodArgumentResolver extends HandlerMethodArgumentR
 			Assert.state(paramNames.length == paramTypes.length,
 					() -> "Invalid number of parameter names: " + paramNames.length + " for constructor " + ctor);
 			Object[] args = new Object[paramTypes.length];
-			WebDataBinder binder = context.createDataBinder(exchange, null, attributeName);
 			String fieldDefaultPrefix = binder.getFieldDefaultPrefix();
 			String fieldMarkerPrefix = binder.getFieldMarkerPrefix();
 			for (int i = 0; i < paramNames.length; i++) {
@@ -262,6 +269,18 @@ public class ModelAttributeMethodArgumentResolver extends HandlerMethodArgumentR
 			}
 			return BeanUtils.instantiateClass(ctor, args);
 		});
+	}
+
+	/**
+	 * Protected method to obtain the values for data binding. By default this
+	 * method delegates to {@link WebExchangeDataBinder#getValuesToBind}.
+	 * @param binder the data binder in use
+	 * @param exchange the current exchange
+	 * @return a map of bind values
+	 * @since 5.3
+	 */
+	public Mono<Map<String, Object>> getValuesToBind(WebExchangeDataBinder binder, ServerWebExchange exchange) {
+		return binder.getValuesToBind(exchange);
 	}
 
 	private boolean hasErrorsArgument(MethodParameter parameter) {

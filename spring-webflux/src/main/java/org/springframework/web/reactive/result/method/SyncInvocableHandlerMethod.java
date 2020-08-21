@@ -5,7 +5,7 @@
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 import reactor.core.publisher.MonoProcessor;
+import reactor.core.publisher.Sinks;
 
 import org.springframework.core.DefaultParameterNameDiscoverer;
 import org.springframework.core.ParameterNameDiscoverer;
@@ -102,7 +103,7 @@ public class SyncInvocableHandlerMethod extends HandlerMethod {
 	public HandlerResult invokeForHandlerResult(ServerWebExchange exchange,
 			BindingContext bindingContext, Object... providedArgs) {
 
-		MonoProcessor<HandlerResult> processor = MonoProcessor.create();
+		MonoProcessor<HandlerResult> processor = MonoProcessor.fromSink(Sinks.one());
 		this.delegate.invoke(exchange, bindingContext, providedArgs).subscribeWith(processor);
 
 		if (processor.isTerminated()) {
