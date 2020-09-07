@@ -554,7 +554,7 @@ public abstract class AbstractAutowireCapableBeanFactory extends AbstractBeanFac
                     "Eagerly caching bean '" + beanName + "' to allow for resolving potential circular references");
             }
             // 为了解决set循环依赖，先封装成一个ObjectFactory放在缓存里占坑，注意getEarlyBeanReference是重写了ObjectFactory的getObject
-            // 方法，后续其他bean依赖的时候会用getObject方法拿到
+            // 方法，后续其他bean依赖的时候会用getObject方法拿到（AOP代理是在这一步完成）
             addSingletonFactory(beanName, () -> getEarlyBeanReference(beanName, mbd, bean));
         }
 
@@ -918,6 +918,7 @@ public abstract class AbstractAutowireCapableBeanFactory extends AbstractBeanFac
     protected Object getEarlyBeanReference(String beanName, RootBeanDefinition mbd, Object bean) {
         Object exposedObject = bean;
         if (!mbd.isSynthetic() && hasInstantiationAwareBeanPostProcessors()) {
+            // 执行BeanPostProcessor aop代理类就是这个时候生成的
             for (BeanPostProcessor bp : getBeanPostProcessors()) {
                 if (bp instanceof SmartInstantiationAwareBeanPostProcessor) {
                     SmartInstantiationAwareBeanPostProcessor ibp = (SmartInstantiationAwareBeanPostProcessor)bp;
